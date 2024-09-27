@@ -24,6 +24,8 @@ namespace BaGet
 
         public void ConfigureServices(IServiceCollection services)
         {
+            services.AddBaGetOptions<IISServerOptions>(nameof(IISServerOptions));
+
             // TODO: Ideally we'd use:
             //
             //       services.ConfigureOptions<ConfigureBaGetOptions>();
@@ -37,7 +39,6 @@ namespace BaGet
             services.AddTransient<IConfigureOptions<IISServerOptions>, ConfigureBaGetOptions>();
             services.AddTransient<IValidateOptions<BaGetOptions>, ConfigureBaGetOptions>();
 
-            services.AddBaGetOptions<IISServerOptions>(nameof(IISServerOptions));
             services.AddBaGetWebApplication(ConfigureBaGetApplication);
 
             // You can swap between implementations of subsystems like storage and search using BaGet's configuration.
@@ -45,7 +46,7 @@ namespace BaGet
             // activated. BaGet will run through all its providers until it finds one that is active.
             services.AddScoped(DependencyInjectionExtensions.GetServiceFromProviders<IContext>);
             services.AddTransient(DependencyInjectionExtensions.GetServiceFromProviders<IStorageService>);
-            services.AddTransient(DependencyInjectionExtensions.GetServiceFromProviders<IPackageDatabase>);
+            services.AddTransient(DependencyInjectionExtensions.GetServiceFromProviders<IPackageService>);
             services.AddTransient(DependencyInjectionExtensions.GetServiceFromProviders<ISearchService>);
             services.AddTransient(DependencyInjectionExtensions.GetServiceFromProviders<ISearchIndexer>);
 

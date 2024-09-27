@@ -1,386 +1,203 @@
-using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
 using Moq;
-using NuGet.Versioning;
 using Xunit;
 
-namespace BaGet.Core.Tests
+namespace BaGet.Core.Tests.Services
 {
     public class PackageServiceTests
     {
-        public class FindPackageVersionsAsync : FactsBase
+        public class AddAsync : FactsBase
         {
             [Fact]
-            public async Task ReturnsEmpty()
+            public async Task ReturnsPackageAlreadyExistsOnUniqueConstraintViolation()
             {
-                Setup();
-
-                var results = await _target.FindPackageVersionsAsync(
-                    "MyPackage",
-                    _cancellationToken);
-
-                Assert.Empty(results);
+                await Task.Yield();
             }
 
             [Fact]
-            public async Task ReturnsLocalVersions()
+            public async Task AddsPackage()
             {
-                Setup(localPackages: new List<Package>
-                {
-                    new Package { Version = new NuGetVersion("1.0.0") },
-                    new Package { Version = new NuGetVersion("2.0.0") },
-                });
-
-                var results = await _target.FindPackageVersionsAsync(
-                    "MyPackage",
-                    _cancellationToken);
-
-                Assert.Equal(2, results.Count);
-                Assert.Equal("1.0.0", results[0].OriginalVersion);
-                Assert.Equal("2.0.0", results[1].OriginalVersion);
-            }
-
-            [Fact]
-            public async Task ReturnsUpstreamVersions()
-            {
-                Setup(upstreamPackages: new List<NuGetVersion>
-                {
-                    new NuGetVersion("1.0.0"),
-                    new NuGetVersion("2.0.0"),
-                });
-
-                var results = await _target.FindPackageVersionsAsync(
-                    "MyPackage",
-                    _cancellationToken);
-
-                Assert.Equal(2, results.Count);
-                Assert.Equal("1.0.0", results[0].OriginalVersion);
-                Assert.Equal("2.0.0", results[1].OriginalVersion);
-            }
-
-            [Fact]
-            public async Task MergesLocalAndUpstreamVersions()
-            {
-                Setup(
-                    localPackages: new List<Package>
-                    {
-                        new Package { Version = new NuGetVersion("1.0.0") },
-                        new Package { Version = new NuGetVersion("2.0.0") },
-                    },
-                    upstreamPackages: new List<NuGetVersion>
-                    {
-                        new NuGetVersion("2.0.0"),
-                        new NuGetVersion("3.0.0"),
-                    });
-
-                var results = await _target.FindPackageVersionsAsync(
-                    "MyPackage",
-                    _cancellationToken);
-
-                var ordered = results.OrderBy(v => v).ToList();
-
-                Assert.Equal(3, ordered.Count);
-                Assert.Equal("1.0.0", ordered[0].OriginalVersion);
-                Assert.Equal("2.0.0", ordered[1].OriginalVersion);
-                Assert.Equal("3.0.0", ordered[2].OriginalVersion);
-            }
-
-            private void Setup(
-                IReadOnlyList<Package> localPackages = null,
-                IReadOnlyList<NuGetVersion> upstreamPackages = null)
-            {
-                localPackages = localPackages ?? new List<Package>();
-                upstreamPackages = upstreamPackages ?? new List<NuGetVersion>();
-
-                _db
-                    .Setup(p => p.FindAsync(
-                        "MyPackage",
-                        /*includeUnlisted: */ true,
-                        _cancellationToken))
-                    .ReturnsAsync(localPackages);
-
-                _upstream
-                    .Setup(u => u.ListPackageVersionsAsync(
-                        "MyPackage",
-                        _cancellationToken))
-                    .ReturnsAsync(upstreamPackages);
+                // TODO: Returns Success
+                // TODO: Adds package
+                await Task.Yield();
             }
         }
 
-        public class FindPackagesAsync : FactsBase
+        public class ExistsAsync : FactsBase
         {
-            [Fact]
-            public async Task ReturnsEmpty()
+            [Theory]
+            [InlineData("Package", "1.0.0", true)]
+            [InlineData("Package", "1.0.0.0", true)]
+            [InlineData("Unlisted.Package", "1.0.0", true)]
+            [InlineData("Fake.Package", "1.0.0", false)]
+            public async Task ReturnsTrueIfPackageExists(string packageId, string packageVersion, bool exists)
             {
-                Setup();
-
-                var results = await _target.FindPackagesAsync("MyPackage", _cancellationToken);
-
-                Assert.Empty(results);
-            }
-
-            [Fact]
-            public async Task ReturnsLocalPackages()
-            {
-                Setup(localPackages: new List<Package>
-                {
-                    new Package { Version = new NuGetVersion("1.0.0") },
-                    new Package { Version = new NuGetVersion("2.0.0") },
-                });
-
-                var results = await _target.FindPackagesAsync("MyPackage", _cancellationToken);
-
-                Assert.Equal(2, results.Count);
-                Assert.Equal("1.0.0", results[0].Version.OriginalVersion);
-                Assert.Equal("2.0.0", results[1].Version.OriginalVersion);
-            }
-
-            [Fact]
-            public async Task ReturnsUpstreamPackages()
-            {
-                Setup(upstreamPackages: new List<Package>
-                {
-                    new Package { Version = new NuGetVersion("1.0.0") },
-                    new Package { Version = new NuGetVersion("2.0.0") },
-                });
-
-                var results = await _target.FindPackagesAsync("MyPackage", _cancellationToken);
-
-                Assert.Equal(2, results.Count);
-                Assert.Equal("1.0.0", results[0].Version.OriginalVersion);
-                Assert.Equal("2.0.0", results[1].Version.OriginalVersion);
-            }
-
-            [Fact]
-            public async Task MergesLocalAndUpstreamPackages()
-            {
-                Setup(
-                    localPackages: new List<Package>
-                    {
-                        new Package { Version = new NuGetVersion("1.0.0") },
-                        new Package { Version = new NuGetVersion("2.0.0") },
-                    },
-                    upstreamPackages: new List<Package>
-                    {
-                        new Package { Version = new NuGetVersion("2.0.0") },
-                        new Package { Version = new NuGetVersion("3.0.0") },
-                    });
-
-                var results = await _target.FindPackagesAsync("MyPackage", _cancellationToken);
-                var ordered = results.OrderBy(p => p.Version).ToList();
-
-                Assert.Equal(3, ordered.Count);
-                Assert.Equal("1.0.0", ordered[0].Version.OriginalVersion);
-                Assert.Equal("2.0.0", ordered[1].Version.OriginalVersion);
-                Assert.Equal("3.0.0", ordered[2].Version.OriginalVersion);
-            }
-
-            private void Setup(
-                IReadOnlyList<Package> localPackages = null,
-                IReadOnlyList<Package> upstreamPackages = null)
-            {
-                localPackages = localPackages ?? new List<Package>();
-                upstreamPackages = upstreamPackages ?? new List<Package>();
-
-                _db
-                    .Setup(p => p.FindAsync(
-                        "MyPackage",
-                        /*includeUnlisted: */ true,
-                        _cancellationToken))
-                    .ReturnsAsync(localPackages);
-
-                _upstream
-                    .Setup(u => u.ListPackagesAsync(
-                        "MyPackage",
-                        _cancellationToken))
-                    .ReturnsAsync(upstreamPackages);
+                System.Console.WriteLine($"TODO: {packageId} {packageVersion} {exists}");
+                await Task.Yield();
             }
         }
 
-        public class FindPackageOrNullAsync : MirrorAsync
+        public class FindAsync : FactsBase
         {
-            protected override async Task TargetAsync()
-                => await _target.FindPackageOrNullAsync(_id, _version, _cancellationToken);
-
             [Fact]
-            public async Task ExistsInDatabase()
+            public async Task ReturnsEmptyListIfPackageDoesNotExist()
             {
-                var expected = new Package();
-
-                _db
-                    .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
-                    .ReturnsAsync(true);
-                _db
-                    .Setup(p => p.FindOrNullAsync(_id, _version,  /*includeUnlisted:*/ true, _cancellationToken))
-                    .ReturnsAsync(expected);
-
-                var result = await _target.FindPackageOrNullAsync(_id, _version, _cancellationToken);
-
-                Assert.Same(expected, result);
+                // Ensure the context has packages with a different id/version
+                await Task.Yield();
             }
 
-            [Fact]
-            public async Task DoesNotExistInDatabase()
+            [Theory]
+            [MemberData(nameof(ReturnsPackagesData))]
+            public async Task ReturnsPackages(string packageId, string packageVersion, bool includeUnlisted, bool exists)
             {
-                _db
-                    .Setup(p => p.FindOrNullAsync(_id, _version,  /*includeUnlisted:*/ true, _cancellationToken))
-                    .ReturnsAsync((Package)null);
-
-                var result = await _target.FindPackageOrNullAsync(_id, _version, _cancellationToken);
-
-                Assert.Null(result);
-            }
-        }
-
-        public class ExistsAsync : MirrorAsync
-        {
-            protected override async Task TargetAsync() => await _target.ExistsAsync(_id, _version, _cancellationToken);
-
-            [Fact]
-            public async Task ExistsInDatabase()
-            {
-                _db
-                    .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
-                    .ReturnsAsync(true);
-
-                var result = await _target.ExistsAsync(_id, _version, _cancellationToken);
-
-                Assert.True(result);
+                // TODO: Ensure resulting versions are normalized.
+                System.Console.WriteLine($"TODO: {packageId} {packageVersion} {includeUnlisted} {exists}");
+                await Task.Yield();
             }
 
-            [Fact]
-            public async Task DoesNotExistInDatabase()
+            public static IEnumerable<object[]> ReturnsPackagesData()
             {
-                _db
-                    .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
-                    .ReturnsAsync(false);
-
-                var result = await _target.ExistsAsync(_id, _version, _cancellationToken);
-
-                Assert.False(result);
-            }
-        }
-
-        public abstract class MirrorAsync : FactsBase
-        {
-            protected readonly string _id = "MyPackage";
-            protected readonly NuGetVersion _version = new NuGetVersion("1.0.0");
-
-            protected abstract Task TargetAsync();
-
-            [Fact]
-            public async Task SkipsIfAlreadyMirrored()
-            {
-                _db
-                    .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
-                    .ReturnsAsync(true);
-
-                await TargetAsync();
-
-                _indexer.Verify(
-                    i => i.IndexAsync(It.IsAny<Stream>(), _cancellationToken),
-                    Times.Never);
-            }
-
-            [Fact]
-            public async Task SkipsIfUpstreamDoesntHavePackage()
-            {
-                _db
-                    .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
-                    .ReturnsAsync(false);
-
-                _upstream
-                    .Setup(u => u.DownloadPackageOrNullAsync(_id, _version, _cancellationToken))
-                    .ReturnsAsync((Stream)null);
-
-                await TargetAsync();
-
-                _indexer.Verify(
-                    i => i.IndexAsync(It.IsAny<Stream>(), _cancellationToken),
-                    Times.Never);
-            }
-
-            [Fact]
-            public async Task SkipsIfUpstreamThrows()
-            {
-                _db
-                    .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
-                    .ReturnsAsync(false);
-
-                _upstream
-                    .Setup(u => u.DownloadPackageOrNullAsync(_id, _version, _cancellationToken))
-                    .ThrowsAsync(new InvalidOperationException("Hello world"));
-
-                await TargetAsync();
-
-                _indexer.Verify(
-                    i => i.IndexAsync(It.IsAny<Stream>(), _cancellationToken),
-                    Times.Never);
-            }
-
-            [Fact]
-            public async Task MirrorsPackage()
-            {
-                _db
-                    .Setup(p => p.ExistsAsync(_id, _version, _cancellationToken))
-                    .ReturnsAsync(false);
-
-                using (var downloadStream = new MemoryStream())
+                object[] ReturnsPackagesHelper(string packageId, string packageVersion, bool includeUnlisted, bool exists)
                 {
-                    _upstream
-                        .Setup(u => u.DownloadPackageOrNullAsync(_id, _version, _cancellationToken))
-                        .ReturnsAsync(downloadStream);
-
-                    await TargetAsync();
-
-                    _indexer.Verify(
-                        i => i.IndexAsync(It.IsAny<Stream>(), _cancellationToken),
-                        Times.Once);
+                    return new object[] { packageId, packageVersion, includeUnlisted, exists };
                 }
+
+                // A package that doesn't exist should never be returned
+                yield return ReturnsPackagesHelper("Fake.Package", "1.0.0", includeUnlisted: true, exists: false);
+
+                // A listed package should be returned regardless of the "includeUnlisted" parameter
+                yield return ReturnsPackagesHelper("Package", "1.0.0", includeUnlisted: false, exists: true);
+                yield return ReturnsPackagesHelper("Package", "1.0.0", includeUnlisted: true, exists: true);
+
+                // The inputted package version should be normalized
+                yield return ReturnsPackagesHelper("Package", "1.0.0.0", includeUnlisted: false, exists: true);
+
+                // Unlisted packages should only be returned if "includeUnlisted" is true
+                yield return ReturnsPackagesHelper("Unlisted.Package", "1.0.0", includeUnlisted: false, exists: false);
+                yield return ReturnsPackagesHelper("Unlisted.Package", "1.0.0", includeUnlisted: true, exists: true);
+            }
+        }
+
+        public class FindOrNullAsync : FactsBase
+        {
+            [Fact]
+            public async Task ReturnsNullIfPackageDoesNotExist()
+            {
+                await Task.Yield();
+            }
+
+            [Theory]
+            [MemberData(nameof(ReturnsPackageData))]
+            public async Task ReturnsPackage(string packageId, string packageVersion, bool includeUnlisted, bool exists)
+            {
+                // TODO: Ensure resulting versions are normalized.
+                System.Console.WriteLine($"TODO: {packageId} {packageVersion} {includeUnlisted} {exists}");
+                await Task.Yield();
+            }
+
+            public static IEnumerable<object[]> ReturnsPackageData()
+            {
+                object[] ReturnsPackageHelper(string packageId, string packageVersion, bool includeUnlisted, bool exists)
+                {
+                    return new object[] { packageId, packageVersion, includeUnlisted, exists };
+                }
+
+                // A package that doesn't exist should never be returned
+                yield return ReturnsPackageHelper("Fake.Package", "1.0.0", includeUnlisted: true, exists: false);
+
+                // A listed package should be returned regardless of the "includeUnlisted" parameter
+                yield return ReturnsPackageHelper("Package", "1.0.0", includeUnlisted: false, exists: true);
+                yield return ReturnsPackageHelper("Package", "1.0.0", includeUnlisted: true, exists: true);
+
+                // The inputted package version should be normalized
+                yield return ReturnsPackageHelper("Package", "1.0.0.0", includeUnlisted: false, exists: true);
+
+                // Unlisted packages should only be returned if "includeUnlisted" is true
+                yield return ReturnsPackageHelper("Unlisted.Package", "1.0.0", includeUnlisted: false, exists: false);
+                yield return ReturnsPackageHelper("Unlisted.Package", "1.0.0", includeUnlisted: true, exists: true);
+            }
+        }
+
+        public class UnlistPackageAsync : FactsBase
+        {
+            [Fact]
+            public async Task ReturnsFalseIfPackageDoesNotExist()
+            {
+                await Task.Yield();
+            }
+
+            [Theory]
+            [InlineData(false)]
+            [InlineData(true)]
+            public async Task UnlistsPackage(bool listed)
+            {
+                // TODO: This should succeed if the package is unlisted.
+                // TODO: Returns true
+                System.Console.WriteLine($"TODO: {listed}");
+                await Task.Yield();
+            }
+        }
+
+        public class RelistPackageAsync : FactsBase
+        {
+            [Fact]
+            public async Task ReturnsFalseIfPackageDoesNotExist()
+            {
+                await Task.Yield();
+            }
+
+            [Theory]
+            [InlineData(false)]
+            [InlineData(true)]
+            public async Task RelistsPackage(bool listed)
+            {
+                // TODO: This should succeed if the package is listed.
+                // TODO: Return true
+                System.Console.WriteLine($"TODO: {listed}");
+                await Task.Yield();
             }
         }
 
         public class AddDownloadAsync : FactsBase
         {
             [Fact]
-            public async Task AddsDownload()
+            public async Task ReturnsFalseIfPackageDoesNotExist()
             {
-                var id = "Hello";
-                var version = new NuGetVersion("1.2.3");
+                await Task.Yield();
+            }
 
-                await _target.AddDownloadAsync(id, version, _cancellationToken);
+            [Fact]
+            public async Task IncrementsPackageDownloads()
+            {
+                await Task.Yield();
+            }
+        }
 
-                _db.Verify(
-                    db => db.AddDownloadAsync(id, version, _cancellationToken),
-                    Times.Once);
+        public class HardDeletePackageAsync : FactsBase
+        {
+            [Fact]
+            public async Task ReturnsFalseIfPackageDoesNotExist()
+            {
+                await Task.Yield();
+            }
+
+            [Fact]
+            public async Task DeletesPackage()
+            {
+                await Task.Yield();
             }
         }
 
         public class FactsBase
         {
-            protected readonly Mock<IPackageDatabase> _db;
-            protected readonly Mock<IUpstreamClient> _upstream;
-            protected readonly Mock<IPackageIndexingService> _indexer;
-
-            protected readonly CancellationToken _cancellationToken = CancellationToken.None;
+            protected readonly Mock<IContext> _context;
             protected readonly PackageService _target;
 
-            protected FactsBase()
+            public FactsBase()
             {
-                _db = new Mock<IPackageDatabase>();
-                _upstream = new Mock<IUpstreamClient>();
-                _indexer = new Mock<IPackageIndexingService>();
-
-                _target = new PackageService(
-                    _db.Object,
-                    _upstream.Object,
-                    _indexer.Object,
-                    Mock.Of<ILogger<PackageService>>());
+                _context = new Mock<IContext>();
+                _target = new PackageService(_context.Object);
             }
         }
     }

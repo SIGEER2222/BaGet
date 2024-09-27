@@ -12,33 +12,173 @@ namespace BaGet.Core
     {
         private readonly IContext _context;
         private readonly IFrameworkCompatibilityService _frameworks;
-        private readonly ISearchResponseBuilder _searchBuilder;
+        private readonly IUrlGenerator _url;
 
-        public DatabaseSearchService(
-            IContext context,
-            IFrameworkCompatibilityService frameworks,
-            ISearchResponseBuilder searchBuilder)
+        public DatabaseSearchService(IContext context, IFrameworkCompatibilityService frameworks, IUrlGenerator url)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _frameworks = frameworks ?? throw new ArgumentNullException(nameof(frameworks));
-            _searchBuilder = searchBuilder ?? throw new ArgumentNullException(nameof(searchBuilder));
+            _url = url ?? throw new ArgumentNullException(nameof(url));
         }
 
-        public async Task<SearchResponse> SearchAsync(SearchRequest request,  CancellationToken cancellationToken)
+        public async Task<SearchResponse> SearchAsync(
+            SearchRequest request,
+            CancellationToken cancellationToken)
+        {
+            var result = new List<SearchResult>();
+            var packages = await SearchImplAsync(
+                request,
+                cancellationToken);
+
+            foreach (var package in packages)
+            {
+                var versions = package.OrderByDescending(p => p.Version).ToList();
+                var latest = versions.First();
+                var iconUrl = latest.HasEmbeddedIcon
+                    ? _url.GetPackageIconDownloadUrl(latest.Id, latest.Version)
+                    : latest.IconUrlString;
+
+                result.Add(new SearchResult
+                {
+                    PackageId = latest.Id,
+                    Version = latest.Version.ToFullString(),
+                    Description = latest.Description,
+                    Authors = latest.Authors,
+                    IconUrl = iconUrl,
+                    LicenseUrl = latest.LicenseUrlString,
+                    ProjectUrl = latest.ProjectUrlString,
+                    RegistrationIndexUrl = _url.GetRegistrationIndexUrl(latest.Id),
+                    Summary = latest.Summary,
+                    Tags = latest.Tags,
+                    Title = latest.Title,
+                    TotalDownloads = versions.Sum(p => p.Downloads),
+                    Versions = versions
+                        .Select(p => new SearchResultVersion
+                        {
+                            RegistrationLeafUrl = _url.GetRegistrationLeafUrl(p.Id, p.Version),
+                            Version = p.Version.ToFullString(),
+                            Downloads = p.Downloads,
+                        })
+                        .ToList()
+                });
+            }
+
+            return new SearchResponse
+            {
+                TotalHits = result.Count,
+                Data = result,
+                Context = SearchContext.Default(_url.GetPackageMetadataResourceUrl())
+            };
+        }
+
+        public async Task<AutocompleteResponse> AutocompleteAsync(
+            AutocompleteRequest request,
+            CancellationToken cancellationToken)
+        {
+            IQueryable<Package> search = _context.Packages;
+
+            if (!string.IsNullOrEmpty(request.Query))
+            {
+                var query = request.Query.ToLower();
+                search = search.Where(p => p.Id.ToLower().Contains(query));
+            }
+
+            search = AddSearchFilters(
+                search,
+                request.IncludePrerelease,
+                request.IncludeSemVer2,
+                request.PackageType,
+                frameworks: null);
+
+            var results = await search
+                .OrderByDescending(p => p.Downloads)
+                .Distinct()
+                .Skip(request.Skip)
+                .Take(request.Take)
+                .Select(p => p.Id)
+                .ToListAsync(cancellationToken);
+
+            return new AutocompleteResponse
+            {
+                TotalHits = results.Count,
+                Data = results,
+                Context = AutocompleteContext.Default
+            };
+        }
+
+        public async Task<AutocompleteResponse> ListPackageVersionsAsync(
+            VersionsRequest request,
+            CancellationToken cancellationToken)
+        {
+            var packageId = request.PackageId.ToLower();
+            IQueryable<Package> search = _context
+                .Packages
+                .Where(p => p.Id.ToLower().Equals(packageId));
+
+            search = AddSearchFilters(
+                search,
+                request.IncludePrerelease,
+                request.IncludeSemVer2,
+                packageType: null,
+                frameworks: null);
+
+            var results = await search
+                .Select(p => p.NormalizedVersionString)
+                .ToListAsync(cancellationToken);
+
+            return new AutocompleteResponse
+            {
+                TotalHits = results.Count,
+                Data = results,
+                Context = AutocompleteContext.Default
+            };
+        }
+
+        public async Task<DependentsResponse> FindDependentsAsync(string packageId, CancellationToken cancellationToken)
+        {
+            var results = await _context
+                .Packages
+                .Where(p => p.Listed)
+                .OrderByDescending(p => p.Downloads)
+                .Where(p => p.Dependencies.Any(d => d.Id == packageId))
+                .Take(20)
+                .Select(r => new DependentResult
+                {
+                    Id = r.Id,
+                    Description = r.Description,
+                    TotalDownloads = r.Downloads
+                })
+                .Distinct()
+                .ToListAsync(cancellationToken);
+
+            return new DependentsResponse
+            {
+                TotalHits = results.Count,
+                Data = results
+            };
+        }
+
+        private async Task<List<IGrouping<string, Package>>> SearchImplAsync(
+            SearchRequest request,
+            CancellationToken cancellationToken)
         {
             var frameworks = GetCompatibleFrameworksOrNull(request.Framework);
-
             IQueryable<Package> search = _context.Packages;
-            search = ApplySearchQuery(search, request.Query);
-            search = ApplySearchFilters(
+
+            search = AddSearchFilters(
                 search,
                 request.IncludePrerelease,
                 request.IncludeSemVer2,
                 request.PackageType,
                 frameworks);
 
-            var packageIds = search
-                .Select(p => p.Id)
+            if (!string.IsNullOrEmpty(request.Query))
+            {
+                var query = request.Query.ToLower();
+                search = search.Where(p => p.Id.ToLower().Contains(query));
+            }
+
+            var packageIds = search.Select(p => p.Id)
                 .Distinct()
                 .OrderBy(id => id)
                 .Skip(request.Skip)
@@ -61,7 +201,7 @@ namespace BaGet.Core
                 search = _context.Packages.Where(p => packageIdResults.Contains(p.Id));
             }
 
-            search = ApplySearchFilters(
+            search = AddSearchFilters(
                 search,
                 request.IncludePrerelease,
                 request.IncludeSemVer2,
@@ -69,95 +209,11 @@ namespace BaGet.Core
                 frameworks);
 
             var results = await search.ToListAsync(cancellationToken);
-            var groupedResults = results
-                .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
-                .Select(group => new PackageRegistration(group.Key, group.ToList()))
-                .ToList();
 
-            return _searchBuilder.BuildSearch(groupedResults);
+            return results.GroupBy(p => p.Id).ToList();
         }
 
-        public async Task<AutocompleteResponse> AutocompleteAsync(
-            AutocompleteRequest request,
-            CancellationToken cancellationToken)
-        {
-            IQueryable<Package> search = _context.Packages;
-
-            search = ApplySearchQuery(search, request.Query);
-            search = ApplySearchFilters(
-                search,
-                request.IncludePrerelease,
-                request.IncludeSemVer2,
-                request.PackageType,
-                frameworks: null);
-
-            var packageIds = await search
-                .OrderByDescending(p => p.Downloads)
-                .Select(p => p.Id)
-                .Distinct()
-                .Skip(request.Skip)
-                .Take(request.Take)
-                .ToListAsync(cancellationToken);
-
-            return _searchBuilder.BuildAutocomplete(packageIds);
-        }
-
-        public async Task<AutocompleteResponse> ListPackageVersionsAsync(
-            VersionsRequest request,
-            CancellationToken cancellationToken)
-        {
-            var packageId = request.PackageId.ToLower();
-            var search = _context
-                .Packages
-                .Where(p => p.Id.ToLower().Equals(packageId));
-
-            search = ApplySearchFilters(
-                search,
-                request.IncludePrerelease,
-                request.IncludeSemVer2,
-                packageType: null,
-                frameworks: null);
-
-            var packageVersions = await search
-                .Select(p => p.NormalizedVersionString)
-                .ToListAsync(cancellationToken);
-
-            return _searchBuilder.BuildAutocomplete(packageVersions);
-        }
-
-        public async Task<DependentsResponse> FindDependentsAsync(string packageId, CancellationToken cancellationToken)
-        {
-            var dependents = await _context
-                .Packages
-                .Where(p => p.Listed)
-                .OrderByDescending(p => p.Downloads)
-                .Where(p => p.Dependencies.Any(d => d.Id == packageId))
-                .Take(20)
-                .Select(r => new PackageDependent
-                {
-                    Id = r.Id,
-                    Description = r.Description,
-                    TotalDownloads = r.Downloads
-                })
-                .Distinct()
-                .ToListAsync(cancellationToken);
-
-            return _searchBuilder.BuildDependents(dependents);
-        }
-
-        private IQueryable<Package> ApplySearchQuery(IQueryable<Package> query, string search)
-        {
-            if (string.IsNullOrEmpty(search))
-            {
-                return query;
-            }
-
-            search = search.ToLowerInvariant();
-
-            return query.Where(p => p.Id.ToLower().Contains(search));
-        }
-
-        private IQueryable<Package> ApplySearchFilters(
+        private IQueryable<Package> AddSearchFilters(
             IQueryable<Package> query,
             bool includePrerelease,
             bool includeSemVer2,
@@ -184,7 +240,9 @@ namespace BaGet.Core
                 query = query.Where(p => p.TargetFrameworks.Any(f => frameworks.Contains(f.Moniker)));
             }
 
-            return query.Where(p => p.Listed);
+            query = query.Where(p => p.Listed);
+
+            return query;
         }
 
         private IReadOnlyList<string> GetCompatibleFrameworksOrNull(string framework)
